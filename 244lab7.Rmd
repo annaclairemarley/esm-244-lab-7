@@ -1,0 +1,198 @@
+---
+title: "244-inclass-lab7"
+author: "AnnaClaire Marley"
+date: "2/21/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Lab 7 - More spatial business {.tabset .tabset-fade}
+
+Attach packages: 
+```{r, warning = FALSE, message = FALSE}
+
+library(tidyverse)
+library(tmap)
+library(sf)
+library(spatstat)
+library(maptools)
+library(sp)
+library(raster)
+# library(rgdal)
+library(gstat)
+library(plotKML) # for points to raster (they won't have this...just testing)
+
+```
+
+###Part 1. Hawaii raster intro
+
+```{r}
+
+# Read in the raster data
+
+hi_par <- raster("PAR_CLIM_M.tif")
+hi_sst <- raster("SST_LTM.tif")
+hi_chl <- raster("CHL_LTM.tif")
+  
+# Base plots
+plot(hi_par)
+plot(hi_sst)
+plot(hi_chl)
+
+```
+
+Reproject to wgs84
+```{r}
+
+wgs84 <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +no_defs"
+
+hi_sst_84 <- projectRaster(hi_sst, crs = wgs84, method = "bilinear")
+
+hi_sst_84
+
+# use aggregate to take out some of the resolution and make it run faster
+```
+
+raster::aggregate() for resampling
+
+```{r}
+
+sst_rs <- aggregate(hi_sst_84, fact = 10)
+plot(sst_rs)
+
+```
+
+Crop a raster:
+
+```{r}
+
+hi_sst_84@extent # total area of the raster extent 
+plot(hi_sst_84)
+
+bounds <- as(extent(-156.2, -154.5, 18.7, 20.4), 'SpatialPolygons')
+
+crs(bounds) <- crs(hi_sst_84)
+
+sst_crop <- crop(hi_sst_84, bounds)
+
+plot(sst_crop)
+
+```
+
+Simple raster math:
+
+Nonsensical variable called "tropicality" that is the sum of PAR + SST +2*ChlA and we want to map that variable
+
+Note: for thematic (categorical) raster data, consider using method = "ngm"
+
+```{r}
+
+hi_par_84 <- projectRaster(hi_par, crs = wgs84, method = "bilinear")
+
+hi_chla_84 <- projectRaster(hi_chl, crs = wgs84, method = "bilinear")
+
+```
+
+```{r}
+
+trop <- hi_par_84 + hi_sst_84 +2*hi_chla_84
+plot(trop)
+
+```
+
+Now lets try to look at something using tmap:
+
+```{r}
+
+islands <- read_sf(dsn = 'islands', layer = "Island_boundaries") %>% 
+  dplyr::select(Island) %>% 
+  st_simplify(dTolerance = 10) %>% 
+  st_transform(crs = 4326)
+
+plot(islands)
+
+```
+
+```{r}
+
+tmap_mode("plot")
+
+sst_map <- tm_shape(hi_sst_84) +
+  tm_raster(title = "Mean Sea Surface Temperature") +
+  tm_layout(bg.color = "navyblue",
+            legend.position = c("left","bottom"),
+            legend.text.color = "white",
+            legend.text.size = 0.5) +
+  tm_shape(islands) + 
+  tm_fill("darkgreen")
+
+tmap_save(sst_map, "AM_hawaii.png", height = 5)
+
+```
+
+conditional rasters and masking
+
+let's say: we have a sensitive species and we're trying to find habitat that it might like. we know they like warm water (average SST >= 25.6 degrees) and solar (PAR) below 54. 
+
+```{r}
+
+hi_sst_84
+
+extent(hi_sst_84) <- extent(hi_par_84)
+
+cr <- raster(nrow = 822,
+             ncol = 1229,
+             xmn = -160.4365,
+             xmx = -154.5373,
+             ymn = 18.7309,
+             ymx = 22.44634)
+
+sst_new <- resample(hi_sst_84, cr, method = "bilinear")
+
+compareRaster(sst_new, hi_par_84)
+
+plot(sst_new)
+plot(hi_par_84)
+
+# make a cropped version just for Kauai
+bounds_main <- as(extent(-159.9, -159.2, 21.7, 22.3), 'SpatialPolygons')
+
+crs(bounds_main) <- crs(sst_new)
+
+par_kauai <- crop(hi_par_84, bounds_main)
+sst_kauai <- crop(sst_new, bounds_main)
+
+plot(par_kauai)
+plot(sst_kauai)
+
+```
+
+Now we only want to isolate the regions where temp >= 25.4, PAR <54
+
+```{r}
+
+par_hab <- par_kauai
+par_hab[par_hab >= 54] <- NA
+plot(par_hab)
+
+sst_hab <- sst_kauai
+sst_hab[sst_hab < 25.4] <- NA
+
+plot(sst_hab)
+
+# where do these overlap? raster::mask
+
+suit_hab <- mask(sst_hab, par_hab)
+plot(suit_hab)
+
+```
+
+
+
+
+
+
+
