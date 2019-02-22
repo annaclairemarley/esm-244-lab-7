@@ -191,6 +191,215 @@ plot(suit_hab)
 ```
 
 
+### Part 2. point pattern analysis
+
+An analysis of red tree voles in humboldt county
+
+```{r}
+
+voles <- read_sf(dsn = 'redtreevoledata', layer = "ds033") %>% 
+  dplyr::select(COUNTY) %>% 
+  filter(COUNTY == "HUM") %>% 
+  st_transform(crs = 4326)
+
+plot(voles)
+
+# get humboldt county outline
+humboldt <- read_sf(dsn = 'redtreevoledata', layer = "california_county_shape_file") %>% 
+  filter(NAME == "Humboldt") %>% 
+  dplyr::select(NAME)
+
+st_crs(humboldt) <- 4326
+
+plot(humboldt)
+
+tm_shape(humboldt) +
+  tm_fill() +
+  tm_shape(voles) +
+  tm_dots(size = 0.2)
+
+ggplot() +
+  geom_sf(data = humboldt) +
+  geom_sf(data = voles)
+
+ggsave("humvoles.png",
+       units = "in",
+       width = 4,
+       height = 6,
+       dpi = 300)
+
+
+```
+
+WE want to explore point patterns in a few diff ways
+
+- quadrat analysis
+
+- distance based (neighbor analysis, G-function and k-function)
+
+```{r}
+
+voles_sp <- as(voles, 'Spatial')
+voles_ppp <- as(voles_sp, "ppp")
+
+humboldt_sp <- as(humboldt, "Spatial")
+humboldt_win <- as(humboldt_sp, "owin")
+
+voles_pb <- ppp(voles_ppp$x, voles_ppp$y, window = humboldt_win)
+
+plot(voles_pb)
+```
+
+Quadrat test:
+
+```{r}
+
+vole_qt <- quadrat.test(voles_pb, nx = 5, ny = 10)
+
+# testing the null hypothesis of spatial evenness (although you'll hear it called a test for CSR)
+
+plot(voles_pb)
+plot(vole_qt, add = TRUE, cex = 0.4)
+
+```
+
+
+plotting kernel densities for spatial plots
+```{r}
+point_density <- density(voles_pb, sigma = 0.02)
+plot(point_density)
+
+vole_raster <- raster(point_density, crs = wgs84)
+
+tm_shape(vole_raster) +
+  tm_raster()
+
+```
+
+Nearest neighbor 
+
+G-function: considers the distance of each observation to its NEAREST neighbor
+
+K-function: considers how close all neighboring observations are to an event (concentric circles)
+
+```{r}
+
+# G-function
+r <- seq(0, 0.15, by = 0.005)
+
+gfunction <- envelope(voles_pb, fun = Gest, r = r, nsim = 20)
+
+plot(gfunction$obs ~ gfunction$r, type = "l", col = "black")
+lines(gfunction$theo ~ gfunction$r, type = "l", col = "red")
+
+# K/L function: Asking about how close ALL neighbors are to EVERY event in the spatial window 
+
+r2 <- seq(0, 0.5, by = 0.05)
+
+lfunction <- envelope(voles_pb, fun = Lest, r = r2, nsim = 20, global = TRUE)
+
+plot(lfunction$obs ~ lfunction$r, type = "l", col = "blue")
+lines(lfunction$theo ~ lfunction$r, type = "l", col = "red")
+
+```
+
+Diggle-Cressie-Loosmore-Ford test of CSR
+
+```{r}
+
+DCLFTest <- dclf.test(voles_pb, nsim = 30)
+DCLFTest
+
+```
+
+
+###Part 3. spatial interpolation by kriging
+
+```{r}
+
+ks_rain <- read_csv("KSRain2.csv")
+ks_sf <- st_as_sf(ks_rain, coords = c("LON", "LAT"), crs = 4326)
+plot(ks_sf)
+
+ks_counties <- read_sf(dsn = 'KSCounties', layer = "ks_counties_shapefile")
+
+st_crs(ks_counties) <- 4326
+plot(ks_counties)
+
+tm_shape(ks_counties) +
+  tm_fill() +
+  tm_shape(ks_sf) +
+  tm_dots("AMT", size = 0.5)
+
+```
+
+```{r}
+
+ks_sp <- as_Spatial(ks_sf)
+
+
+
+```
+
+Make a spatial grid to interpolate values over
+
+```{r}
+
+lat <- seq(37,40, length.out = 200)
+long <- seq(-94.6, -102, length.out = 200)
+
+grid <- expand.grid(lon = long, lat = lat) #for creating a spatial grid
+grid_sf <- st_as_sf(grid, coords = c("lon","lat"), crs = 4326)
+grid_sp <- as_Spatial(grid_sf)
+
+```
+
+Then make a variograph and find the variogram model
+
+```{r}
+
+ks_vgm <- variogram(AMT ~ 1, ks_sp)
+plot(ks_vgm)
+
+ks_vgm_fit <- fit.variogram(ks_vgm, model = vgm(nugget = 0.2, psill = 0.8, range = 200, model = "Sph"))
+
+plot(ks_vgm, ks_vgm_fit)
+```
+
+Now we can do spatial interpolation
+
+```{r}
+
+ks_krige <- krige(AMT ~ 1, ks_sp, grid_sp, model = ks_vgm_fit)
+
+ks_krige_df <- as.data.frame(ks_krige)
+
+ks_krige_2 <- ks_krige_df %>% 
+  rename(lon = coords.x1, lat = coords.x2, predicted = var1.pred, err = var1.var)
+
+rain_predicted <- st_as_sf(ks_krige_2, coords = c("lon", "lat"), crs = 4326)
+
+ks <- read_sf(dsn = "states", layer = "cb_2017_us_state_20m") %>% 
+  dplyr::select(NAME) %>% 
+  filter(NAME == "Kansas") %>% 
+  st_transform(crs = 4326)
+
+plot(rain_predicted)
+
+rain_cropped <- st_intersection(rain_predicted, ks)
+
+plot(rain_cropped)
+
+```
+
+
+
+
+
+
+
+
+
 
 
 
